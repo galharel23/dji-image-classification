@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Application Output/Logs
+_GOOD_IMAGES/
+_BAD_IMAGES/
+sorting_log.txt
+*.log
+
+# Project specific
+images/
+# We keep exiftool.exe and exiftool_files in the repo so other clones have the dependency
