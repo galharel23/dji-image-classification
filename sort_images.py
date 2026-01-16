@@ -340,28 +340,29 @@ def main():
         print(f"Found bundled ExifTool.")
         exif_executable = bundled_exif
         
-        # Verify permissions/existence of files logic
-        print("Verifying execution permissions...")
-        try:
-             # Try to invoke version to check if it runs
-             import subprocess
-             # We must set CWD to the folder containing exiftool.exe for it to find its files!
-             # or just rely on PyExifTool
-             # Let's try to verify if it runs
-             result = subprocess.run([exif_executable, '-ver'], capture_output=True, text=True, cwd=os.path.dirname(exif_executable))
-             print(f"ExifTool Version Check: {result.stdout.strip()} (Stderr: {result.stderr.strip()})")
-        except Exception as e:
-            print(f"WARNING: ExifTool found but failed to run directly: {e}")
-        
         # CRITICAL FIX: Manually inject PERL5LIB for the bundled environment
-        # The logs showed @INC was empty, meaning it lost track of its lib folder.
         # Structure is: .../exiftool.exe and .../exiftool_files/lib
         lib_dir = os.path.join(os.path.dirname(bundled_exif), "exiftool_files", "lib")
         if os.path.exists(lib_dir):
-            print(f"Injecting PERL5LIB: {lib_dir}")
+            if getattr(sys, 'frozen', False):
+                 # Only print in debug/frozen mode to reduce noise
+                 print(f"Injecting PERL5LIB: {lib_dir}")
             os.environ["PERL5LIB"] = lib_dir
-        else:
-             print(f"WARNING: Lib dir not found at {lib_dir}")
+        
+        # Verify permissions/existence of files logic
+        if getattr(sys, 'frozen', False):
+            print("Verifying execution permissions...")
+            try:
+                 # Try to invoke version to check if it runs
+                 import subprocess
+                 # We must set CWD to the folder containing exiftool.exe for it to find its files!
+                 result = subprocess.run([exif_executable, '-ver'], capture_output=True, text=True, cwd=os.path.dirname(exif_executable))
+                 if result.returncode == 0:
+                     print(f"ExifTool Version Check: {result.stdout.strip()} (OK)")
+                 else:
+                     print(f"ExifTool Version Check Failed: {result.stderr.strip()}")
+            except Exception as e:
+                print(f"WARNING: ExifTool found but failed to run directly: {e}")
 
     else:
         print("Bundled ExifTool NOT found.")
