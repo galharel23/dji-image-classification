@@ -6,17 +6,25 @@ import cv2
 import exiftool 
 import logging
 
-# --- CONFIGURATION ---
-# Define thresholds
-MIN_WIDTH = 3000
-MIN_HEIGHT = 2000
-MAX_DIGITAL_ZOOM = 1.0
-MAX_ISO = 1600
-MIN_BLUR_SCORE = 100.0   # Sharpness: Higher = Stricter
-MIN_DISTANCE = 20.0      # Meters (LRF Target)
-MAX_SPEED = 5.0          # Meters/Second
-MIN_BRIGHTNESS = 20.0    # 0-255 (Avoid Pitch Black)
-MAX_BRIGHTNESS = 240.0   # 0-255 (Avoid Blown Out White)
+import configparser
+
+# --- DEFAULTS (Used if config is missing) ---
+DEFAULT_CONFIG = {
+    "Filters": {
+        "min_distance_meters": "20.0",
+        "max_speed_mps": "5.0",
+        "max_digital_zoom": "1.0",
+        "min_blur_score": "100.0",
+        "min_width": "3000",
+        "min_height": "2000",
+        "max_iso": "1600",
+        "min_brightness": "20.0",
+        "max_brightness": "240.0"
+    },
+    "Settings": {
+        "image_folder": "."  # "." means current folder
+    }
+}
 
 # Setup Logging
 logging.basicConfig(filename='sorting_log.txt', level=logging.INFO, 
@@ -28,6 +36,49 @@ def get_script_dir():
         return os.path.dirname(sys.executable)
     else:
         return os.path.dirname(os.path.abspath(__file__))
+
+def load_config(script_dir):
+    """Load config.ini or create it if missing."""
+    config_path = os.path.join(script_dir, 'config.ini')
+    config = configparser.ConfigParser()
+    
+    if not os.path.exists(config_path):
+        print(f"Creating default config file: {config_path}")
+        config.read_dict(DEFAULT_CONFIG)
+        with open(config_path, 'w') as f:
+            config.write(f)
+    else:
+        print(f"Loading config from: {config_path}")
+        config.read(config_path)
+    
+    # Return parsed values with fallback to defaults
+    try:
+        cfg = {}
+        # Filters
+        f = config['Filters']
+        cfg['min_dist'] = float(f.get('min_distance_meters', 20.0))
+        cfg['max_speed'] = float(f.get('max_speed_mps', 5.0))
+        cfg['max_zoom'] = float(f.get('max_digital_zoom', 1.0))
+        cfg['min_blur'] = float(f.get('min_blur_score', 100.0))
+        cfg['min_w'] = int(f.get('min_width', 3000))
+        cfg['min_h'] = int(f.get('min_height', 2000))
+        cfg['max_iso'] = int(f.get('max_iso', 1600))
+        cfg['min_bright'] = float(f.get('min_brightness', 20.0))
+        cfg['max_bright'] = float(f.get('max_brightness', 240.0))
+        
+        # Settings
+        raw_folder = config['Settings'].get('image_folder', '.')
+        # Fix: Remove quotes if user added them in config.ini (common mistake)
+        cfg['img_folder'] = raw_folder.strip('"').strip("'")
+        
+        return cfg
+    except Exception as e:
+        print(f"Error reading config: {e}. Using defaults.")
+        return {
+            'min_dist': 20.0, 'max_speed': 5.0, 'max_zoom': 1.0, 'min_blur': 100.0,
+            'min_w': 3000, 'min_h': 2000, 'max_iso': 1600, 'min_bright': 20.0, 'max_bright': 240.0,
+            'img_folder': '.'
+        }
 
 def get_resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
@@ -127,7 +178,7 @@ def get_image_metrics(file_path, et):
 
     return metrics
 
-def evaluate_image(metrics):
+def evaluate_image(metrics, cfg):
     """
     Decides if an image is GOOD or BAD based on metrics.
     Returns (is_good, log_string, reason_list)
@@ -148,7 +199,7 @@ def evaluate_image(metrics):
 
     # 1. Resolution
     res_str = f"{metrics['width']}x{metrics['height']}"
-    if metrics['width'] < MIN_WIDTH or metrics['height'] < MIN_HEIGHT:
+    if metrics['width'] < cfg['min_w'] or metrics['height'] < cfg['min_h']:
         reasons.append(f"Low Resolution ({res_str})")
         is_good = False
     
@@ -159,29 +210,29 @@ def evaluate_image(metrics):
         optical_type = "Zoom"
         
     # Digital Zoom Check
-    dzoom_str, dzoom_pass = grade(metrics['digital_zoom'], MAX_DIGITAL_ZOOM, "<=", "x")
+    dzoom_str, dzoom_pass = grade(metrics['digital_zoom'], cfg['max_zoom'], "<=", "x")
     if not dzoom_pass:
         reasons.append(f"Digital Zoom ({metrics['digital_zoom']}x)")
         is_good = False
 
     # 3. ISO
-    iso_str, iso_pass = grade(metrics['iso'], MAX_ISO, "<=")
+    iso_str, iso_pass = grade(metrics['iso'], cfg['max_iso'], "<=")
     if not iso_pass:
         reasons.append(f"High ISO ({metrics['iso']})")
         is_good = False
         
     # 4. Distance (LRF)
     if metrics['has_distance']:
-        dist_str, dist_pass = grade(metrics['distance'], MIN_DISTANCE, ">=", "m")
+        dist_str, dist_pass = grade(metrics['distance'], cfg['min_dist'], ">=", "m")
         if not dist_pass:
-            reasons.append(f"Too Close ({metrics['distance']}m < {MIN_DISTANCE}m)")
+            reasons.append(f"Too Close ({metrics['distance']}m < {cfg['min_dist']}m)")
             is_good = False
     else:
         dist_str = "N/A (No LRF)" 
         # Optional: Fail if LRF missing? For now, let's pass it logic-wise but log it.
     
     # 5. Flight Speed
-    speed_str, speed_pass = grade(metrics['speed'], MAX_SPEED, "<=", "m/s")
+    speed_str, speed_pass = grade(metrics['speed'], cfg['max_speed'], "<=", "m/s")
     if not speed_pass:
         reasons.append(f"Moving Too Fast ({metrics['speed']:.1f} m/s)")
         is_good = False
@@ -191,7 +242,7 @@ def evaluate_image(metrics):
         return False, f"[ERROR] Could not load image: {metrics['load_error']}", [metrics['load_error']]
         
     # Blur
-    blur_str, blur_pass = grade(metrics['blur_score'], MIN_BLUR_SCORE, ">=")
+    blur_str, blur_pass = grade(metrics['blur_score'], cfg['min_blur'], ">=")
     if not blur_pass:
         reasons.append(f"Blurry (Score: {metrics['blur_score']:.1f})")
         is_good = False
@@ -199,11 +250,11 @@ def evaluate_image(metrics):
     # Brightness
     bright_val = metrics['brightness']
     bright_status = "(PASS)"
-    if bright_val < MIN_BRIGHTNESS:
+    if bright_val < cfg['min_bright']:
         reasons.append(f"Too Dark ({bright_val:.1f})")
         bright_status = "(FAIL: Dark)"
         is_good = False
-    elif bright_val > MAX_BRIGHTNESS:
+    elif bright_val > cfg['max_bright']:
         reasons.append(f"Overexposed ({bright_val:.1f})")
         bright_status = "(FAIL: Bright)"
         is_good = False
@@ -223,17 +274,36 @@ def evaluate_image(metrics):
     return is_good, log_string, reasons
 
 def main():
-    base_dir = get_script_dir()
+    # Load Config
+    script_dir = get_script_dir()
+    cfg = load_config(script_dir)
+
+    # Determine Input Directory
+    base_dir = cfg['img_folder']
+    if base_dir == '.' or base_dir.strip() == "":
+        base_dir = script_dir
+    
+    # Create output directories (Relative to base_dir, or script_dir? User said "same as he did")
+    # Usually relative to where the images are found.
     good_dir = os.path.join(base_dir, '_GOOD_IMAGES')
     bad_dir = os.path.join(base_dir, '_BAD_IMAGES')
 
     # Create output directories
+    if not os.path.exists(base_dir):
+        print(f"CRITICAL ERROR: Input folder not found: {base_dir}")
+        print("Please check 'image_folder' in config.ini")
+        input("Press Enter to exit")
+        return
+
     os.makedirs(good_dir, exist_ok=True)
     os.makedirs(bad_dir, exist_ok=True)
 
     print(f"--- Processing folder: {base_dir} ---")
-    print(f"THRESHOLDS: Dist>{MIN_DISTANCE}m | Speed<{MAX_SPEED}m/s | Zoom<={MAX_DIGITAL_ZOOM}")
-    print(f"            Blur>={MIN_BLUR_SCORE} | Bright [{MIN_BRIGHTNESS}-{MAX_BRIGHTNESS}]")
+    print(f"FILTERS LOADED FROM CONFIG:")
+    print(f"  > Dist >= {cfg['min_dist']}m")
+    print(f"  > Speed <= {cfg['max_speed']}m/s")
+    print(f"  > Zoom <= {cfg['max_zoom']}x")
+    print(f"  > Blur Score >= {cfg['min_blur']}")
     print("-" * 60)
     
     # Get all images
@@ -292,7 +362,7 @@ def main():
     else:
         print("Bundled ExifTool NOT found.")
         # 2. Check if exiftool is in the same folder (Script mode)
-        local_exif = os.path.join(base_dir, 'exiftool.exe')
+        local_exif = os.path.join(script_dir, 'exiftool.exe')
         if os.path.exists(local_exif):
             print(f"Found local ExifTool: {local_exif}")
             exif_executable = local_exif
@@ -304,7 +374,7 @@ def main():
                 print("CRITICAL ERROR: 'exiftool.exe' NOT FOUND!")
                 print("!" * 60)
                 print("The internal ExifTool seems missing and it is not on your PATH.")
-                print(f"Please ensure exiftool.exe is in: {base_dir}")
+                print(f"Please ensure exiftool.exe is in: {script_dir}")
                 print("-" * 60)
                 input("Press Enter to exit.")
                 return
@@ -338,7 +408,7 @@ def main():
                 metrics = get_image_metrics(filepath, et)
                 
                 # Step 2: Evaluate
-                is_good, log_string, reasons = evaluate_image(metrics)
+                is_good, log_string, reasons = evaluate_image(metrics, cfg)
                 
                 # Step 3: Act
                 if is_good:
