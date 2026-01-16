@@ -26,10 +26,6 @@ DEFAULT_CONFIG = {
     }
 }
 
-# Setup Logging
-logging.basicConfig(filename='sorting_log.txt', level=logging.INFO, 
-                    format='%(asctime)s - %(message)s')
-
 def get_script_dir():
     """Determine the directory where the script/exe is located."""
     if getattr(sys, 'frozen', False):
@@ -298,7 +294,15 @@ def main():
     os.makedirs(good_dir, exist_ok=True)
     os.makedirs(bad_dir, exist_ok=True)
 
+    # Setup Logging in the output folder
+    log_path = os.path.join(base_dir, 'sorting_log.txt')
+    # Force reconfiguration of logging
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    logging.basicConfig(filename=log_path, level=logging.INFO, format='%(asctime)s - %(message)s')
+    
     print(f"--- Processing folder: {base_dir} ---")
+    print(f"Log File: {log_path}")
     print(f"FILTERS LOADED FROM CONFIG:")
     print(f"  > Dist >= {cfg['min_dist']}m")
     print(f"  > Speed <= {cfg['max_speed']}m/s")
